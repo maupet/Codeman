@@ -147,8 +147,12 @@ export function registerAuthMiddleware(app: FastifyInstance, https: boolean): Au
       return;
     }
 
-    // Auth failed — track failure count
-    authFailures.set(clientIp, failures + 1);
+    // Auth failed — only count toward rate limit when credentials were actually
+    // provided (brute-force attempt). Expired-session requests (no Authorization
+    // header) should not trigger rate limiting.
+    if (auth) {
+      authFailures.set(clientIp, failures + 1);
+    }
 
     reply.header('WWW-Authenticate', 'Basic realm="Codeman"');
     reply.code(401).send('Unauthorized');
