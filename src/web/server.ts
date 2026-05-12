@@ -126,6 +126,7 @@ import {
   registerCommandPanelRoutes,
   registerIntegrationRoutes,
   registerFeatureUsageRoutes,
+  registerNotionWebhookRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
 
@@ -784,6 +785,7 @@ export class WebServer extends EventEmitter {
     registerCommandPanelRoutes(this.app, ctx);
     registerIntegrationRoutes(this.app, ctx);
     registerFeatureUsageRoutes(this.app);
+    registerNotionWebhookRoutes(this.app);
 
     // Initialize and start the orchestrator
     try {
