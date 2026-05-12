@@ -75,6 +75,7 @@ import type {
 } from './types/orchestrator.js';
 import { DEFAULT_ORCHESTRATOR_CONFIG } from './types/orchestrator.js';
 import { getErrorMessage } from './types/api.js';
+import { loadNotionConfig, updateNotionStatus, updateNotionField, addNotionComment } from './integrations/notion.js';
 
 const execFileP = promisify(execFile);
 
@@ -170,6 +171,81 @@ async function isCaseOrchestrationEnabled(caseName: string): Promise<boolean> {
   }
 
   return false;
+}
+
+// ─── Notion completion callback ──────────────────────────────────────────────
+
+/**
+ * Handle Notion status updates when a work item with source 'notion' transitions.
+ * Called from handleCompletionFlow() and from the PATCH /api/work-items/:id route.
+ */
+export async function notionCompletionCallback(item: WorkItem): Promise<void> {
+  if (item.source !== 'notion') return;
+
+  const notionPageId = (item.metadata as Record<string, unknown>)?.notionPageId as string | undefined;
+  if (!notionPageId) return;
+
+  const config = loadNotionConfig();
+  if (!config) {
+    console.warn('[orchestrator] Notion config not found — skipping Notion callback');
+    return;
+  }
+
+  const notionAction = (item.metadata as Record<string, unknown>)?.notionAction as string | undefined;
+
+  if (item.status === 'review') {
+    if (notionAction === 'spec-issue') {
+      // Spec session completed — update Issue(s) field if the session stored created issues
+      const createdIssues = (item.metadata as Record<string, unknown>)?.createdIssues as string | undefined;
+      if (createdIssues) {
+        await updateNotionField(notionPageId, 'Issue(s)', createdIssues, config.apiKey);
+      }
+      // Advance to Review Issue
+      await updateNotionStatus(notionPageId, 'Review Issue', config.apiKey);
+      console.log(`[orchestrator] Notion: ${notionPageId} → Review Issue (spec-issue completed)`);
+    } else {
+      // Normal coding session completed — advance to Review PR
+      await updateNotionStatus(notionPageId, 'Review PR', config.apiKey);
+      console.log(`[orchestrator] Notion: ${notionPageId} → Review PR`);
+    }
+  } else if (item.status === 'done') {
+    // Final completion — update Notion with PR refs and summary comment
+    await updateNotionStatus(notionPageId, 'Done', config.apiKey);
+
+    // Populate PR field
+    const prInfo = item.branchName || '';
+    if (prInfo) {
+      await updateNotionField(notionPageId, 'PR', prInfo, config.apiKey);
+    }
+
+    // Build and post completion comment
+    const commentParts: string[] = [];
+    if (item.compactSummary) commentParts.push(item.compactSummary);
+
+    const meta = item.metadata as Record<string, unknown>;
+    const sessionSummary = meta?.sessionSummary as string | undefined;
+    if (sessionSummary) commentParts.push(sessionSummary);
+
+    const mergePrepResult = meta?.mergePrepResult as
+      | {
+          passed?: boolean;
+          commitsAhead?: number;
+          failures?: string[];
+        }
+      | undefined;
+    if (mergePrepResult) {
+      const status = mergePrepResult.passed ? 'PASSED' : `FAILED (${(mergePrepResult.failures ?? []).join(', ')})`;
+      commentParts.push(`Merge-prep: ${status}, ${mergePrepResult.commitsAhead ?? 0} commits`);
+    }
+
+    if (item.branchName) commentParts.push(`Branch: ${item.branchName}`);
+
+    if (commentParts.length > 0) {
+      await addNotionComment(notionPageId, commentParts.join('\n\n'), config.apiKey);
+    }
+
+    console.log(`[orchestrator] Notion: ${notionPageId} → Done`);
+  }
 }
 
 // ─── Orchestrator ────────────────────────────────────────────────────────────
@@ -728,6 +804,18 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       }
     }
 
+    // Spec-issue sessions don't produce commits — auto-complete them
+    const notionAction = (item.metadata as Record<string, unknown>)?.notionAction;
+    if (!hasCommits && notionAction === 'spec-issue') {
+      updateWorkItem(item.id, { status: 'done' });
+      this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: 'done' });
+      console.log(`[orchestrator] ${item.id} → done (spec-issue session completed)`);
+      notionCompletionCallback(getWorkItem(item.id)!).catch((err) => {
+        console.error(`[orchestrator] Notion callback failed for ${item.id}:`, getErrorMessage(err));
+      });
+      return;
+    }
+
     if (hasCommits) {
       updateWorkItem(item.id, { status: 'review' });
       this.deps.broadcast(SseEvent.WorkItemStatusChanged, { id: item.id, status: 'review' });
@@ -865,6 +953,14 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
 
     // Send push notification
     this.deps.sendPushNotifications(SseEvent.OrchestratorCompletion, completionPayload);
+
+    // Notify Notion if this is a Notion-sourced work item
+    const freshItem = getWorkItem(workItemId);
+    if (freshItem) {
+      notionCompletionCallback(freshItem).catch((err) => {
+        console.error(`[orchestrator] Notion callback failed for ${workItemId}:`, getErrorMessage(err));
+      });
+    }
 
     console.log(`[orchestrator] completion flow done for ${workItemId} — "${item.title}"`);
   }
