@@ -5554,80 +5554,96 @@ class CodemanApp {
       this.terminal.scrollLines(lines);
     }, { passive: false, signal: this._containerListenerAC.signal });
 
-    // Touch scrolling - only use custom JS scrolling on desktop
-    // Mobile uses native browser scrolling via CSS touch-action: pan-y
-    const isMobileDevice = MobileDetection.isTouchDevice() && window.innerWidth < 1024;
-
-    if (!isMobileDevice) {
-      // Desktop touch scrolling with custom momentum
+    // Touch scrolling for the terminal — for ALL touch devices (phone, tablet,
+    // touchscreen laptop).
+    //
+    // xterm v6 keeps scrollback in its buffer and renders it to a canvas; the
+    // .xterm-viewport is NOT a natively scrollable DOM element (its scrollHeight
+    // equals its clientHeight, and there is no .xterm-scroll-area sizing element).
+    // So neither native CSS touch-scroll nor `viewport.scrollTop` move the buffer —
+    // only xterm's own `terminal.scrollLines()` API does (which is what the wheel
+    // handler above uses). The previous code relied on native scroll for mobile and
+    // viewport.scrollTop for desktop touch, both of which silently broke on the v6
+    // upgrade. Drive scrollLines() from touch deltas instead.
+    if (MobileDetection.isTouchDevice()) {
       let touchLastY = 0;
-      let pendingDelta = 0;
-      let velocity = 0;
-      let lastTime = 0;
-      let scrollFrame = null;
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let axisLocked = null; // 'v' (scroll) | 'h' (leave to swipe-to-switch handler)
+      let residualPx = 0;    // sub-cell pixel remainder, carried between moves
+      let velocity = 0;      // lines/frame, for momentum after release
       let isTouching = false;
+      let momentumFrame = null;
 
-      const viewport = container.querySelector('.xterm-viewport');
+      // Pixel height of one row — converts a touch drag (px) into buffer lines.
+      const cellHeightPx = () => {
+        const rows = this.terminal?.rows || 24;
+        const vpEl = container.querySelector('.xterm-viewport');
+        const h = (vpEl && vpEl.clientHeight) || container.clientHeight || (rows * 16);
+        return Math.max(8, h / rows);
+      };
 
-      // Single RAF loop handles both touch and momentum
-      const scrollLoop = (timestamp) => {
-        if (!viewport) return;
-
-        const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1; // Normalize to 60fps
-        lastTime = timestamp;
-
-        if (isTouching) {
-          // During touch: apply pending delta
-          if (pendingDelta !== 0) {
-            viewport.scrollTop += pendingDelta;
-            pendingDelta = 0;
-          }
-          scrollFrame = requestAnimationFrame(scrollLoop);
-        } else if (Math.abs(velocity) > 0.1) {
-          // Momentum phase
-          viewport.scrollTop += velocity * dt;
-          velocity *= 0.94; // Smooth deceleration
-          scrollFrame = requestAnimationFrame(scrollLoop);
-        } else {
-          scrollFrame = null;
+      const momentumLoop = () => {
+        if (!this.terminal || Math.abs(velocity) < 0.1) {
+          momentumFrame = null;
           velocity = 0;
+          return;
         }
+        this.terminal.scrollLines(Math.round(velocity));
+        velocity *= 0.92; // deceleration
+        momentumFrame = requestAnimationFrame(momentumLoop);
       };
 
       container.addEventListener('touchstart', (ev) => {
-        if (ev.touches.length === 1) {
-          touchLastY = ev.touches[0].clientY;
-          pendingDelta = 0;
-          velocity = 0;
-          isTouching = true;
-          lastTime = 0;
-          if (!scrollFrame) {
-            scrollFrame = requestAnimationFrame(scrollLoop);
-          }
-        }
+        if (ev.touches.length !== 1) return;
+        isTouching = true;
+        axisLocked = null;
+        residualPx = 0;
+        velocity = 0;
+        touchLastY = touchStartY = ev.touches[0].clientY;
+        touchStartX = ev.touches[0].clientX;
+        if (momentumFrame) { cancelAnimationFrame(momentumFrame); momentumFrame = null; }
       }, { passive: true, signal: this._containerListenerAC.signal });
 
       container.addEventListener('touchmove', (ev) => {
-        if (ev.touches.length === 1 && isTouching) {
-          const touchY = ev.touches[0].clientY;
-          const delta = touchLastY - touchY;
-          pendingDelta += delta;
-          velocity = delta * 1.2; // Track for momentum
-          touchLastY = touchY;
+        if (!isTouching || ev.touches.length !== 1) return;
+        const y = ev.touches[0].clientY;
+        const x = ev.touches[0].clientX;
+
+        // Lock the axis once the finger has moved enough. Horizontal drags are left
+        // to the swipe-to-switch-session handler on .main (which prevents default on
+        // its own); we only act on vertical drags.
+        if (!axisLocked) {
+          const dxTotal = Math.abs(x - touchStartX);
+          const dyTotal = Math.abs(y - touchStartY);
+          if (dxTotal < 8 && dyTotal < 8) return;
+          axisLocked = dyTotal >= dxTotal ? 'v' : 'h';
+        }
+        if (axisLocked !== 'v') return;
+
+        const ch = cellHeightPx();
+        // Finger moving up (y decreases) => scroll toward newer output (positive lines);
+        // finger moving down => scroll up into history (negative lines).
+        residualPx += (touchLastY - y);
+        touchLastY = y;
+        const lines = residualPx / ch | 0; // truncate toward zero
+        if (lines !== 0) {
+          this.terminal.scrollLines(lines);
+          residualPx -= lines * ch;
+          velocity = lines; // approximate lines/frame for momentum
         }
       }, { passive: true, signal: this._containerListenerAC.signal });
 
-      container.addEventListener('touchend', () => {
+      const endTouch = () => {
+        if (!isTouching) return;
         isTouching = false;
-        // Momentum continues in scrollLoop
-      }, { passive: true, signal: this._containerListenerAC.signal });
-
-      container.addEventListener('touchcancel', () => {
-        isTouching = false;
-        velocity = 0;
-      }, { passive: true, signal: this._containerListenerAC.signal });
+        if (axisLocked === 'v' && Math.abs(velocity) >= 1 && !momentumFrame) {
+          momentumFrame = requestAnimationFrame(momentumLoop);
+        }
+      };
+      container.addEventListener('touchend', endTouch, { passive: true, signal: this._containerListenerAC.signal });
+      container.addEventListener('touchcancel', endTouch, { passive: true, signal: this._containerListenerAC.signal });
     }
-    // Mobile: native scrolling handles touch via CSS
 
     // Welcome message
     this.showWelcome();
