@@ -5546,12 +5546,13 @@ class CodemanApp {
     // Register link provider for clickable file paths in Bash tool output
     this.registerFilePathLinkProvider();
 
-    // Always use mouse wheel for terminal scrollback, never forward to application.
-    // Prevents Claude's Ink UI (plan mode selector) from capturing scroll as option navigation.
+    // Mouse wheel scrolling. In the normal buffer this scrolls xterm's scrollback;
+    // when a fullscreen TUI owns the alternate screen (Claude fullscreen, vim, …) it
+    // forwards the wheel to the app instead (see _scrollTerminalBy).
     container.addEventListener('wheel', (ev) => {
       ev.preventDefault();
       const lines = Math.round(ev.deltaY / 25) || (ev.deltaY > 0 ? 1 : -1);
-      this.terminal.scrollLines(lines);
+      this._scrollTerminalBy(lines);
     }, { passive: false, signal: this._containerListenerAC.signal });
 
     // Touch scrolling for the terminal — for ALL touch devices (phone, tablet,
@@ -5589,7 +5590,7 @@ class CodemanApp {
           velocity = 0;
           return;
         }
-        this.terminal.scrollLines(Math.round(velocity));
+        this._scrollTerminalBy(Math.round(velocity));
         velocity *= 0.92; // deceleration
         momentumFrame = requestAnimationFrame(momentumLoop);
       };
@@ -5628,7 +5629,7 @@ class CodemanApp {
         touchLastY = y;
         const lines = residualPx / ch | 0; // truncate toward zero
         if (lines !== 0) {
-          this.terminal.scrollLines(lines);
+          this._scrollTerminalBy(lines);
           residualPx -= lines * ch;
           velocity = lines; // approximate lines/frame for momentum
         }
@@ -5987,6 +5988,45 @@ class CodemanApp {
     // If viewportY >= baseY, we're showing the latest content (at bottom)
     // Allow 2 lines tolerance for edge cases
     return buffer.viewportY >= buffer.baseY - 2;
+  }
+
+  /**
+   * Scroll the terminal by `lines` (negative = toward history, positive = toward newest).
+   *
+   * In the NORMAL buffer this scrolls xterm's scrollback. But a fullscreen TUI
+   * (Claude Code's fullscreen renderer, vim, htop, …) runs in the ALTERNATE screen
+   * buffer, which has no scrollback — the app scrolls its own view in response to
+   * mouse-wheel input. In that case we forward the scroll to the app instead.
+   */
+  _scrollTerminalBy(lines) {
+    if (!this.terminal || !lines) return;
+    if (this.terminal.buffer.active.type === 'alternate') {
+      this._forwardWheelToApp(lines < 0 ? 'up' : 'down', Math.min(Math.abs(lines), 8));
+    } else {
+      this.terminal.scrollLines(lines);
+    }
+  }
+
+  /**
+   * Forward wheel scrolling to the foreground app as SGR-1006 mouse-wheel events.
+   * Sent RAW to the PTY (useMux:false → direct write) so the escape bytes reach the
+   * app intact — the tmux send-keys path used for normal input would mangle them.
+   *
+   * Claude Code's fullscreen TUI enables mouse tracking and scrolls on the wheel.
+   * Caveat: if the app is showing a selection menu, it may treat wheel as navigation
+   * rather than scrolling — that's inherent to forwarding and matches a native terminal.
+   */
+  _forwardWheelToApp(direction, steps) {
+    const sid = this.activeSessionId;
+    if (!sid) return;
+    // SGR 1006: button 64 = wheel up, 65 = wheel down; press-only (trailing 'M').
+    const seq = direction === 'up' ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M';
+    const data = seq.repeat(Math.max(1, Math.min(steps | 0, 8)));
+    fetch(`/api/sessions/${encodeURIComponent(sid)}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: data, useMux: false }),
+    }).catch(() => {});
   }
 
   batchTerminalWrite(data) {
