@@ -18,6 +18,7 @@ import {
   AI_IDLE_CHECK_TIMEOUT_MS,
   AI_IDLE_CHECK_COOLDOWN_MS,
   AI_PLAN_CHECK_TIMEOUT_MS,
+  resolveModelSlug,
   AI_PLAN_CHECK_COOLDOWN_MS,
 } from '../../config/ai-defaults.js';
 
@@ -186,6 +187,8 @@ export function registerRespawnRoutes(
     // No controller running - save as pre-config for when respawn starts
     const existing = ctx.mux.getSession(id);
     const currentConfig = existing?.respawnConfig;
+    const aiCheckModelConfig = await ctx.getModelConfig();
+    const aiCheckDefault = resolveModelSlug(aiCheckModelConfig?.internalModels?.aiCheck, AI_CHECK_MODEL);
     const merged: PersistedRespawnConfig = {
       enabled: config.enabled ?? currentConfig?.enabled ?? false,
       idleTimeoutMs: config.idleTimeoutMs ?? currentConfig?.idleTimeoutMs ?? 10000,
@@ -197,7 +200,7 @@ export function registerRespawnRoutes(
       autoAcceptPrompts: config.autoAcceptPrompts ?? currentConfig?.autoAcceptPrompts ?? true,
       autoAcceptDelayMs: config.autoAcceptDelayMs ?? currentConfig?.autoAcceptDelayMs ?? 8000,
       aiIdleCheckEnabled: config.aiIdleCheckEnabled ?? currentConfig?.aiIdleCheckEnabled ?? true,
-      aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? AI_CHECK_MODEL,
+      aiIdleCheckModel: config.aiIdleCheckModel ?? currentConfig?.aiIdleCheckModel ?? aiCheckDefault,
       aiIdleCheckMaxContext:
         config.aiIdleCheckMaxContext ?? currentConfig?.aiIdleCheckMaxContext ?? AI_IDLE_CHECK_MAX_CONTEXT,
       aiIdleCheckTimeoutMs:
@@ -205,7 +208,7 @@ export function registerRespawnRoutes(
       aiIdleCheckCooldownMs:
         config.aiIdleCheckCooldownMs ?? currentConfig?.aiIdleCheckCooldownMs ?? AI_IDLE_CHECK_COOLDOWN_MS,
       aiPlanCheckEnabled: config.aiPlanCheckEnabled ?? currentConfig?.aiPlanCheckEnabled ?? true,
-      aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? AI_CHECK_MODEL,
+      aiPlanCheckModel: config.aiPlanCheckModel ?? currentConfig?.aiPlanCheckModel ?? aiCheckDefault,
       aiPlanCheckMaxContext:
         config.aiPlanCheckMaxContext ?? currentConfig?.aiPlanCheckMaxContext ?? AI_PLAN_CHECK_MAX_CONTEXT,
       aiPlanCheckTimeoutMs:

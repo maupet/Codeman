@@ -1689,6 +1689,7 @@ const ContextBar = {
 // ===================================================================
 const ModelPicker = {
   MODELS: [
+    { id: 'claude-fable-5',    short: 'Fable',  slug: 'fable',  desc: 'Mythos-class. Most powerful model.',    ctx: '1M' },
     { id: 'claude-opus-4-6',   short: 'Opus',   slug: 'opus',   desc: 'Most capable. Best for complex tasks.', ctx: '1M' },
     { id: 'claude-sonnet-4-6', short: 'Sonnet', slug: 'sonnet', desc: 'Fast and capable. Good balance.',       ctx: '200k' },
     { id: 'claude-haiku-4-5',  short: 'Haiku',  slug: 'haiku',  desc: 'Fastest. Quick edits and simple tasks.', ctx: '200k' },
@@ -14641,6 +14642,16 @@ class CodemanApp {
         if (implementEl) implementEl.value = overrides.implement || '';
         if (testEl) testEl.value = overrides.test || '';
         if (reviewEl) reviewEl.value = overrides.review || '';
+        // Internal AI models
+        const internal = config.internalModels || {};
+        const aiCheckEl = document.getElementById('appSettingsModelAiCheck');
+        const orchEl = document.getElementById('appSettingsModelOrchestrator');
+        const sessNameEl = document.getElementById('appSettingsModelSessionName');
+        const cmdPanelEl = document.getElementById('appSettingsModelCommandPanel');
+        if (aiCheckEl) aiCheckEl.value = internal.aiCheck || 'opus';
+        if (orchEl) orchEl.value = internal.orchestrator || 'sonnet';
+        if (sessNameEl) sessNameEl.value = internal.sessionName || 'haiku';
+        if (cmdPanelEl) cmdPanelEl.value = internal.commandPanel || 'haiku';
       }
     } catch (err) {
       console.warn('Failed to load model config:', err);
@@ -14662,10 +14673,22 @@ class CodemanApp {
     if (testEl?.value) agentTypeOverrides.test = testEl.value;
     if (reviewEl?.value) agentTypeOverrides.review = reviewEl.value;
 
+    const aiCheckEl = document.getElementById('appSettingsModelAiCheck');
+    const orchEl = document.getElementById('appSettingsModelOrchestrator');
+    const sessNameEl = document.getElementById('appSettingsModelSessionName');
+    const cmdPanelEl = document.getElementById('appSettingsModelCommandPanel');
+    const internalModels = {
+      aiCheck: aiCheckEl?.value || 'opus',
+      orchestrator: orchEl?.value || 'sonnet',
+      sessionName: sessNameEl?.value || 'haiku',
+      commandPanel: cmdPanelEl?.value || 'haiku',
+    };
+
     const config = {
       defaultModel: defaultModelEl?.value || 'opus',
       showRecommendations: showRecsEl?.checked ?? true,
       agentTypeOverrides,
+      internalModels,
     };
 
     try {

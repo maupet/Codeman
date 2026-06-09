@@ -52,6 +52,7 @@ import { homedir } from 'node:os';
 import { Session } from './session.js';
 import type { SessionState, AgentProfile, ClaudeMode } from './types/session.js';
 import type { NiceConfig } from './types/common.js';
+import { resolveModelSlug } from './config/ai-defaults.js';
 import type { StateStore } from './state-store.js';
 import type { TerminalMultiplexer } from './mux-interface.js';
 import { claimWorkItem, getReadyWorkItems, updateWorkItem, listWorkItems, getWorkItem } from './work-items/index.js';
@@ -91,7 +92,10 @@ export interface OrchestratorDeps {
   cleanupSession: (sessionId: string) => Promise<void>;
   mux: TerminalMultiplexer;
   getGlobalNiceConfig: () => Promise<NiceConfig | undefined>;
-  getModelConfig: () => Promise<{ defaultModel?: string } | null>;
+  getModelConfig: () => Promise<{
+    defaultModel?: string;
+    internalModels?: { aiCheck?: string; orchestrator?: string; sessionName?: string; commandPanel?: string };
+  } | null>;
   getClaudeModeConfig: () => Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }>;
   sendPushNotifications: (event: string, data: Record<string, unknown>) => void;
 }
@@ -483,8 +487,11 @@ ${agentList}
 
 Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning": "..." }`;
 
+      const modelConfig = await this.deps.getModelConfig();
+      const orchModel = resolveModelSlug(modelConfig?.internalModels?.orchestrator, 'claude-sonnet-4-6');
+
       const response = (await client.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: orchModel,
         max_tokens: 256,
         messages: [{ role: 'user', content: prompt }],
       })) as { content: Array<{ type: string; text?: string }> };

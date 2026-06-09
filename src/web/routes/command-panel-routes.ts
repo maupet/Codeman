@@ -6,8 +6,8 @@
  *   POST /api/command          — send a natural language command
  *   POST /api/command/confirm  — confirm a destructive action
  *
- * Uses Claude claude-haiku-4-5-20251001 with tool_use to interpret user intent and map to
- * internal Codeman API operations.
+ * Uses Claude with tool_use to interpret user intent and map to internal Codeman
+ * API operations. Model is configurable via Settings → Models → Command Panel.
  */
 
 import { FastifyInstance } from 'fastify';
@@ -21,6 +21,7 @@ import { listWorkItems, createWorkItem, updateWorkItem } from '../../work-items/
 import { getOrchestrator } from '../../orchestrator.js';
 import type { WorkItemStatus } from '../../work-items/index.js';
 import { fetchAsanaTask, fetchGitHubContext, fetchSentryIssue, fetchSlackMessage } from '../../integrations/index.js';
+import { resolveModelSlug } from '../../config/ai-defaults.js';
 
 type CommandPanelCtx = SessionPort & EventPort & ConfigPort & InfraPort;
 
@@ -643,6 +644,9 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
       conversation.messages = conversation.messages.slice(-MAX_MESSAGES);
     }
 
+    const cmdModelConfig = await ctx.getModelConfig();
+    const cmdModel = resolveModelSlug(cmdModelConfig?.internalModels?.commandPanel, 'claude-haiku-4-5');
+
     try {
       // Dynamic import — SDK is optional, not in package.json
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -664,7 +668,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
 
       // Call Claude with tools
       const response = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
+        model: cmdModel,
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
         tools: TOOLS,
@@ -744,7 +748,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
 
           // Follow-up call to get text summary of the tool results
           const followUp = await client.messages.create({
-            model: 'claude-haiku-4-5-20251001',
+            model: cmdModel,
             max_tokens: 1024,
             system: SYSTEM_PROMPT,
             tools: TOOLS,
@@ -817,7 +821,7 @@ export function registerCommandPanelRoutes(app: FastifyInstance, ctx: CommandPan
             };
           };
           const retryResponse = await client2.messages.create({
-            model: 'claude-haiku-4-5-20251001',
+            model: cmdModel,
             max_tokens: 1024,
             system: SYSTEM_PROMPT,
             tools: TOOLS,

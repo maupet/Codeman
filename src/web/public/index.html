@@ -1296,6 +1296,7 @@
             <div class="form-row">
               <label>Default Model</label>
               <select id="appSettingsDefaultModel" class="form-select">
+                <option value="fable">Fable (Mythos-class)</option>
                 <option value="opus">Opus (Most capable)</option>
                 <option value="sonnet">Sonnet (Balanced)</option>
                 <option value="haiku">Haiku (Fast & cheap)</option>
@@ -1319,6 +1320,7 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Quick searches, codebase exploration</span>
             </div>
@@ -1329,6 +1331,7 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Code writing, feature implementation</span>
             </div>
@@ -1339,6 +1342,7 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Writing and running tests</span>
             </div>
@@ -1349,8 +1353,51 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Code review, quality checks</span>
+            </div>
+            <div class="form-section-header">Internal AI Models</div>
+            <p class="form-hint" style="margin: 0 0 12px 0;">Models used for Codeman's internal AI features (idle detection, command panel, etc.).</p>
+            <div class="form-row">
+              <label>AI Checker</label>
+              <select id="appSettingsModelAiCheck" class="form-select">
+                <option value="opus">Opus (default)</option>
+                <option value="fable">Fable</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="haiku">Haiku</option>
+              </select>
+              <span class="form-hint">Idle detection &amp; plan-mode checks</span>
+            </div>
+            <div class="form-row">
+              <label>Orchestrator</label>
+              <select id="appSettingsModelOrchestrator" class="form-select">
+                <option value="sonnet">Sonnet (default)</option>
+                <option value="fable">Fable</option>
+                <option value="opus">Opus</option>
+                <option value="haiku">Haiku</option>
+              </select>
+              <span class="form-hint">Agent routing for work items</span>
+            </div>
+            <div class="form-row">
+              <label>Session Naming</label>
+              <select id="appSettingsModelSessionName" class="form-select">
+                <option value="haiku">Haiku (default)</option>
+                <option value="fable">Fable</option>
+                <option value="opus">Opus</option>
+                <option value="sonnet">Sonnet</option>
+              </select>
+              <span class="form-hint">Auto-generated session names</span>
+            </div>
+            <div class="form-row">
+              <label>Command Panel</label>
+              <select id="appSettingsModelCommandPanel" class="form-select">
+                <option value="haiku">Haiku (default)</option>
+                <option value="fable">Fable</option>
+                <option value="opus">Opus</option>
+                <option value="sonnet">Sonnet</option>
+              </select>
+              <span class="form-hint">Natural language command interpreter</span>
             </div>
           </div>
           <!-- Paths Tab -->
