@@ -3062,6 +3062,10 @@ const TranscriptView = {
   _container: null,
   _sessionId: null,
   _pendingToolUses: {},
+  // tool_use ids of AskUserQuestion prompts already surfaced live from a PreToolUse
+  // hook. Used to dedup the later JSONL tool_use block and suppress its orphan
+  // tool_result (the live widget is removed on answer). Cleared on load().
+  _auqHandledIds: new Set(),
   _loadGen: 0,       // incremented each load(); SSE blocks check this to avoid races
   _compactingEl: null,   // DOM ref to the animated compacting spinner pill
   _isCompacting: false,  // true while auto-compact is in progress (survives container clears)
@@ -3172,6 +3176,7 @@ const TranscriptView = {
   async load(sessionId, opts = {}) {
     this._sessionId = sessionId;
     this._pendingToolUses = {};
+    this._auqHandledIds = new Set();
     this._lastSkillLaunch = null;
     clearTimeout(this._workingDebounce);
     this._workingDebounce = null;
@@ -3241,6 +3246,7 @@ const TranscriptView = {
         this._compactingEl = null;
         this._container.textContent = '';
         this._pendingToolUses = {};
+        this._auqHandledIds = new Set();
         this._lastSkillLaunch = null;
         // If a /clear is in progress (_clearPending), the backend may still be serving
         // the old conversation's blocks — the new conversation UUID hasn't been registered
@@ -3355,6 +3361,16 @@ const TranscriptView = {
       this._ensureThinkingBubbleLast();
       this._scrollToBottom(true);
     }
+  },
+
+  /** Removes the most recent optimistic user bubble (rollback when a send fails).
+   *  Only touches DOM marked data-optimistic; leaves real (SSE-reconciled) blocks alone. */
+  removeLastOptimistic() {
+    if (!this._container) return;
+    const bubbles = this._container.querySelectorAll('[data-optimistic="true"]');
+    const last = bubbles[bubbles.length - 1];
+    if (last) last.remove();
+    this._pendingOptimisticText = null;
   },
 
   /** Renders an AskUserQuestion tool block as an inline interactive question.
@@ -3511,6 +3527,45 @@ const TranscriptView = {
 
     renderQuestion(0);
     return el;
+  },
+
+  /** True if an AskUserQuestion widget with this tool_use id is currently in the DOM. */
+  _auqElExists(id) {
+    if (!this._container || !id) return false;
+    const blocks = this._container.querySelectorAll('.tv-auq-block');
+    for (const b of blocks) {
+      if (b.dataset.toolId === id) return true;
+    }
+    return false;
+  },
+
+  /**
+   * Render an AskUserQuestion live from a PreToolUse hook, BEFORE its tool_use
+   * block lands in the transcript JSONL (which doesn't happen while the question
+   * is pending). This is what makes the question + supporting info readable and
+   * answerable in the transcript view — including on mobile, where the terminal
+   * is hard to scroll. Deduped against the later JSONL block via _auqHandledIds.
+   * Returns true if rendered (or already shown), false if the transcript view
+   * isn't currently showing this session.
+   */
+  appendAskUserQuestionFromHook(sessionId, questions, toolId) {
+    if (!this._container || this._sessionId !== sessionId) return false;
+    if (!Array.isArray(questions) || questions.length === 0) return false;
+    const transcriptEl = document.getElementById('transcriptView');
+    if (transcriptEl && transcriptEl.style.display === 'none') return false;
+
+    const id = toolId || ('auq-live-' + String(questions[0]?.header || questions[0]?.question || '').slice(0, 48));
+    this._auqHandledIds.add(id);
+    if (this._auqElExists(id)) return true; // hook fired twice — already shown
+
+    const block = { type: 'tool_use', name: 'AskUserQuestion', id, input: { questions } };
+    const placeholder = this._container.querySelector('.tv-placeholder');
+    if (placeholder) placeholder.remove();
+    const el = this._renderAskUserQuestionBlock(block);
+    el.dataset.toolId = id;
+    this._container.appendChild(el);
+    this._scrollToBottom(false);
+    return true;
   },
 
   append(block) {
@@ -4052,6 +4107,9 @@ const TranscriptView = {
       el = this._renderTextBlock(block);
     } else if (block.type === 'tool_use') {
       if (block.name === 'AskUserQuestion' && Array.isArray(block.input?.questions) && block.input.questions.length > 0) {
+        // Already surfaced live from a PreToolUse hook (and possibly already
+        // answered/removed) — don't render a duplicate when the JSONL catches up.
+        if (block.id && this._auqHandledIds.has(block.id)) return;
         el = this._renderAskUserQuestionBlock(block);
         el.dataset.toolId = block.id;
         this._container.appendChild(el);
@@ -4065,6 +4123,13 @@ const TranscriptView = {
       const pendingEl = block.toolUseId
         ? this._container.querySelector('[data-tool-id="' + CSS.escape(block.toolUseId) + '"]')
         : null;
+      // AskUserQuestion surfaced live from a hook: remove the inline widget if it's
+      // still showing, and never fall through to render an orphan tool_result row.
+      if (block.toolUseId && this._auqHandledIds.has(block.toolUseId)) {
+        if (pendingEl) pendingEl.remove();
+        if (scroll) this._scrollToBottom(false);
+        return;
+      }
       // Detect skill launches — render a pill instead of a tool wrapper row.
       const skillMatch = typeof block.content === 'string' && block.content.match(/^Launching skill: (.+)/);
       if (skillMatch) {
@@ -4942,6 +5007,7 @@ class CodemanApp {
     this.flickerFilterBuffer = '';
     this.flickerFilterActive = false;
     this.flickerFilterTimeout = null;
+    this._flickerCycleStart = 0; // performance.now() when current buffering cycle began (bounds max hold)
 
     // Render debouncing
     this.renderSessionTabsTimeout = null;
@@ -5458,11 +5524,12 @@ class CodemanApp {
     // Load scrollback setting from localStorage (default 500)
     const scrollback = parseInt(localStorage.getItem('codeman-scrollback')) || DEFAULT_SCROLLBACK;
 
-    // Cap scrollback on mobile: each line adds to xterm-viewport scroll height.
-    // 500 lines × 10px font = 5000px tall scroll layer on a 900px screen.
-    // Cap at 200 lines to keep the native scroll layer manageable.
+    // Cap scrollback on mobile: each line adds to xterm-viewport scroll height,
+    // and on mobile we rely on the browser's native scroll layer (not xterm's own
+    // wheel handling), so a very tall buffer costs memory/jank. 1000 lines keeps
+    // it usable for scrolling back through a Claude session while staying bounded.
     const isMobile = MobileDetection.getDeviceType() !== 'desktop';
-    const MOBILE_SCROLLBACK_CAP = 200;
+    const MOBILE_SCROLLBACK_CAP = 1000;
     const effectiveScrollback = isMobile ? Math.min(scrollback, MOBILE_SCROLLBACK_CAP) : scrollback;
 
     this.terminal = new Terminal({
@@ -5550,88 +5617,105 @@ class CodemanApp {
     // Register link provider for clickable file paths in Bash tool output
     this.registerFilePathLinkProvider();
 
-    // Always use mouse wheel for terminal scrollback, never forward to application.
-    // Prevents Claude's Ink UI (plan mode selector) from capturing scroll as option navigation.
+    // Mouse wheel scrolling. In the normal buffer this scrolls xterm's scrollback;
+    // when a fullscreen TUI owns the alternate screen (Claude fullscreen, vim, …) it
+    // forwards the wheel to the app instead (see _scrollTerminalBy).
     container.addEventListener('wheel', (ev) => {
       ev.preventDefault();
       const lines = Math.round(ev.deltaY / 25) || (ev.deltaY > 0 ? 1 : -1);
-      this.terminal.scrollLines(lines);
+      this._scrollTerminalBy(lines);
     }, { passive: false, signal: this._containerListenerAC.signal });
 
-    // Touch scrolling - only use custom JS scrolling on desktop
-    // Mobile uses native browser scrolling via CSS touch-action: pan-y
-    const isMobileDevice = MobileDetection.isTouchDevice() && window.innerWidth < 1024;
-
-    if (!isMobileDevice) {
-      // Desktop touch scrolling with custom momentum
+    // Touch scrolling for the terminal — for ALL touch devices (phone, tablet,
+    // touchscreen laptop).
+    //
+    // xterm v6 keeps scrollback in its buffer and renders it to a canvas; the
+    // .xterm-viewport is NOT a natively scrollable DOM element (its scrollHeight
+    // equals its clientHeight, and there is no .xterm-scroll-area sizing element).
+    // So neither native CSS touch-scroll nor `viewport.scrollTop` move the buffer —
+    // only xterm's own `terminal.scrollLines()` API does (which is what the wheel
+    // handler above uses). The previous code relied on native scroll for mobile and
+    // viewport.scrollTop for desktop touch, both of which silently broke on the v6
+    // upgrade. Drive scrollLines() from touch deltas instead.
+    if (MobileDetection.isTouchDevice()) {
       let touchLastY = 0;
-      let pendingDelta = 0;
-      let velocity = 0;
-      let lastTime = 0;
-      let scrollFrame = null;
+      let touchStartX = 0;
+      let touchStartY = 0;
+      let axisLocked = null; // 'v' (scroll) | 'h' (leave to swipe-to-switch handler)
+      let residualPx = 0;    // sub-cell pixel remainder, carried between moves
+      let velocity = 0;      // lines/frame, for momentum after release
       let isTouching = false;
+      let momentumFrame = null;
 
-      const viewport = container.querySelector('.xterm-viewport');
+      // Pixel height of one row — converts a touch drag (px) into buffer lines.
+      const cellHeightPx = () => {
+        const rows = this.terminal?.rows || 24;
+        const vpEl = container.querySelector('.xterm-viewport');
+        const h = (vpEl && vpEl.clientHeight) || container.clientHeight || (rows * 16);
+        return Math.max(8, h / rows);
+      };
 
-      // Single RAF loop handles both touch and momentum
-      const scrollLoop = (timestamp) => {
-        if (!viewport) return;
-
-        const dt = lastTime ? (timestamp - lastTime) / 16.67 : 1; // Normalize to 60fps
-        lastTime = timestamp;
-
-        if (isTouching) {
-          // During touch: apply pending delta
-          if (pendingDelta !== 0) {
-            viewport.scrollTop += pendingDelta;
-            pendingDelta = 0;
-          }
-          scrollFrame = requestAnimationFrame(scrollLoop);
-        } else if (Math.abs(velocity) > 0.1) {
-          // Momentum phase
-          viewport.scrollTop += velocity * dt;
-          velocity *= 0.94; // Smooth deceleration
-          scrollFrame = requestAnimationFrame(scrollLoop);
-        } else {
-          scrollFrame = null;
+      const momentumLoop = () => {
+        if (!this.terminal || Math.abs(velocity) < 0.1) {
+          momentumFrame = null;
           velocity = 0;
+          return;
         }
+        this._scrollTerminalBy(Math.round(velocity));
+        velocity *= 0.92; // deceleration
+        momentumFrame = requestAnimationFrame(momentumLoop);
       };
 
       container.addEventListener('touchstart', (ev) => {
-        if (ev.touches.length === 1) {
-          touchLastY = ev.touches[0].clientY;
-          pendingDelta = 0;
-          velocity = 0;
-          isTouching = true;
-          lastTime = 0;
-          if (!scrollFrame) {
-            scrollFrame = requestAnimationFrame(scrollLoop);
-          }
-        }
+        if (ev.touches.length !== 1) return;
+        isTouching = true;
+        axisLocked = null;
+        residualPx = 0;
+        velocity = 0;
+        touchLastY = touchStartY = ev.touches[0].clientY;
+        touchStartX = ev.touches[0].clientX;
+        if (momentumFrame) { cancelAnimationFrame(momentumFrame); momentumFrame = null; }
       }, { passive: true, signal: this._containerListenerAC.signal });
 
       container.addEventListener('touchmove', (ev) => {
-        if (ev.touches.length === 1 && isTouching) {
-          const touchY = ev.touches[0].clientY;
-          const delta = touchLastY - touchY;
-          pendingDelta += delta;
-          velocity = delta * 1.2; // Track for momentum
-          touchLastY = touchY;
+        if (!isTouching || ev.touches.length !== 1) return;
+        const y = ev.touches[0].clientY;
+        const x = ev.touches[0].clientX;
+
+        // Lock the axis once the finger has moved enough. Horizontal drags are left
+        // to the swipe-to-switch-session handler on .main (which prevents default on
+        // its own); we only act on vertical drags.
+        if (!axisLocked) {
+          const dxTotal = Math.abs(x - touchStartX);
+          const dyTotal = Math.abs(y - touchStartY);
+          if (dxTotal < 8 && dyTotal < 8) return;
+          axisLocked = dyTotal >= dxTotal ? 'v' : 'h';
+        }
+        if (axisLocked !== 'v') return;
+
+        const ch = cellHeightPx();
+        // Finger moving up (y decreases) => scroll toward newer output (positive lines);
+        // finger moving down => scroll up into history (negative lines).
+        residualPx += (touchLastY - y);
+        touchLastY = y;
+        const lines = residualPx / ch | 0; // truncate toward zero
+        if (lines !== 0) {
+          this._scrollTerminalBy(lines);
+          residualPx -= lines * ch;
+          velocity = lines; // approximate lines/frame for momentum
         }
       }, { passive: true, signal: this._containerListenerAC.signal });
 
-      container.addEventListener('touchend', () => {
+      const endTouch = () => {
+        if (!isTouching) return;
         isTouching = false;
-        // Momentum continues in scrollLoop
-      }, { passive: true, signal: this._containerListenerAC.signal });
-
-      container.addEventListener('touchcancel', () => {
-        isTouching = false;
-        velocity = 0;
-      }, { passive: true, signal: this._containerListenerAC.signal });
+        if (axisLocked === 'v' && Math.abs(velocity) >= 1 && !momentumFrame) {
+          momentumFrame = requestAnimationFrame(momentumLoop);
+        }
+      };
+      container.addEventListener('touchend', endTouch, { passive: true, signal: this._containerListenerAC.signal });
+      container.addEventListener('touchcancel', endTouch, { passive: true, signal: this._containerListenerAC.signal });
     }
-    // Mobile: native scrolling handles touch via CSS
 
     // Welcome message
     this.showWelcome();
@@ -5977,6 +6061,45 @@ class CodemanApp {
     return buffer.viewportY >= buffer.baseY - 2;
   }
 
+  /**
+   * Scroll the terminal by `lines` (negative = toward history, positive = toward newest).
+   *
+   * In the NORMAL buffer this scrolls xterm's scrollback. But a fullscreen TUI
+   * (Claude Code's fullscreen renderer, vim, htop, …) runs in the ALTERNATE screen
+   * buffer, which has no scrollback — the app scrolls its own view in response to
+   * mouse-wheel input. In that case we forward the scroll to the app instead.
+   */
+  _scrollTerminalBy(lines) {
+    if (!this.terminal || !lines) return;
+    if (this.terminal.buffer.active.type === 'alternate') {
+      this._forwardWheelToApp(lines < 0 ? 'up' : 'down', Math.min(Math.abs(lines), 8));
+    } else {
+      this.terminal.scrollLines(lines);
+    }
+  }
+
+  /**
+   * Forward wheel scrolling to the foreground app as SGR-1006 mouse-wheel events.
+   * Sent RAW to the PTY (useMux:false → direct write) so the escape bytes reach the
+   * app intact — the tmux send-keys path used for normal input would mangle them.
+   *
+   * Claude Code's fullscreen TUI enables mouse tracking and scrolls on the wheel.
+   * Caveat: if the app is showing a selection menu, it may treat wheel as navigation
+   * rather than scrolling — that's inherent to forwarding and matches a native terminal.
+   */
+  _forwardWheelToApp(direction, steps) {
+    const sid = this.activeSessionId;
+    if (!sid) return;
+    // SGR 1006: button 64 = wheel up, 65 = wheel down; press-only (trailing 'M').
+    const seq = direction === 'up' ? '\x1b[<64;1;1M' : '\x1b[<65;1;1M';
+    const data = seq.repeat(Math.max(1, Math.min(steps | 0, 8)));
+    fetch(`/api/sessions/${encodeURIComponent(sid)}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: data, useMux: false }),
+    }).catch(() => {});
+  }
+
   batchTerminalWrite(data) {
     // If a buffer load (chunkedTerminalWrite) is in progress, queue live events
     // to prevent interleaving historical buffer data with live SSE data.
@@ -6008,6 +6131,10 @@ class CodemanApp {
     const isShellMode = session?.mode === 'shell';
     const hasCursorUpRedraw = !isShellMode && /\x1b\[\d{1,2}A/.test(data);
     if (hasCursorUpRedraw || (this.flickerFilterActive && !flickerFilterEnabled)) {
+      // Mark the start of a fresh buffering cycle so we can bound the total hold time.
+      if (!this.flickerFilterActive) {
+        this._flickerCycleStart = performance.now();
+      }
       this.flickerFilterActive = true;
       this.flickerFilterBuffer += data;
 
@@ -6017,6 +6144,21 @@ class CodemanApp {
       // session emitting terminal data faster than SYNC_WAIT_TIMEOUT_MS never flushes,
       // accumulating MBs in flickerFilterBuffer that freeze Chrome all at once.
       if (hasCursorUpRedraw) {
+        // Bound the total hold: a busy session emits cursor-up redraws faster than
+        // SYNC_WAIT_TIMEOUT_MS, so resetting the timer on every redraw starves the
+        // flush entirely — the buffer grows until the 256KB safety valve dumps it all
+        // at once, which reads as the terminal freezing then catching up in a janky
+        // burst (and stalls keystroke echo, since the echoed input line is itself a
+        // cursor-up redraw). Once we've withheld output for MAX_FLICKER_HOLD_MS, flush
+        // now instead of extending the deadline yet again.
+        if (performance.now() - this._flickerCycleStart >= MAX_FLICKER_HOLD_MS) {
+          if (this.flickerFilterTimeout) {
+            clearTimeout(this.flickerFilterTimeout);
+            this.flickerFilterTimeout = null;
+          }
+          this.flushFlickerBuffer();
+          return;
+        }
         if (this.flickerFilterTimeout) {
           clearTimeout(this.flickerFilterTimeout);
         }
@@ -7935,7 +8077,12 @@ class CodemanApp {
       title: q.header || 'Question',
       message: q.question || 'Claude is asking a question',
     });
-    // The inline tv-auq-block in TranscriptView handles all rendering — no panel needed.
+    // Surface the question live in the transcript view — full text + option
+    // descriptions, scrollable on mobile, answerable inline. The transcript JSONL
+    // won't carry the tool_use block while the question is still pending, so this
+    // live PreToolUse hook is the only way to show it now (deduped against the
+    // eventual JSONL block via TranscriptView._auqHandledIds).
+    TranscriptView.appendAskUserQuestionFromHook(data.sessionId, questions, data.tool_use_id);
   }
 
   _onHookStop(data) {
@@ -21352,50 +21499,23 @@ const InputPanel = {
     // Single line + \r — no multi-line tmux issues
     const inputString = sendText + '\r';
 
-    try {
-      await app.sendInput(inputString, _sendSessionId);
-      // Shell sessions write directly to PTY — no Ink, no busy detection,
-      // no need to retry Enter. Skip the polling entirely.
-      const _sendSession = app.sessions?.get(_sendSessionId);
-      if (_sendSession?.mode !== 'shell') {
-        // Backend now awaits tmux completion before responding, so we know Enter
-        // has been dispatched by the time we reach here.
-        // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
-        // actually received the input. Uses real-time status/isWorking only (NOT
-        // displayStatus which has a 4s hide-debounce that causes false positives).
-        let _sendChecks = 0;
-        const _sendCheckTimer = setInterval(() => {
-          _sendChecks++;
-          const s = app.sessions?.get(_sendSessionId);
-          const isBusy = s?.status === 'busy' || s?.isWorking;
-          if (isBusy) { clearInterval(_sendCheckTimer); return; }
-          if (_sendChecks >= 20) {
-            clearInterval(_sendCheckTimer);
-            // Session still idle 3 s after tmux confirmed Enter was sent —
-            // Enter was likely dropped; resend it once as a fallback.
-            const sNow = app.sessions?.get(_sendSessionId);
-            const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
-            if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
-          }
-        }, 150);
-      }
-    } catch (err) {
-      // Send failed — restore the user's input so nothing is lost.
-      console.error('[InputPanel] send failed, restoring input:', err);
-      ta.value = text;
-      this._restoreImages(images.map(img => img.path));
-      this._autoGrow(ta);
-      if (typeof app !== 'undefined') app.showToast('Message failed to send — your input has been restored.', 'error');
-      return; // Don't clear draft or show optimistic UI
-    }
+    // ---- Optimistic UI (Lever 1) ----
+    // Everything below runs IMMEDIATELY, before/without awaiting the POST, so the
+    // compose bar feels instant regardless of tmux send-keys timing. The actual
+    // network send is fired-and-forgotten afterward; its .catch() rolls the UI back
+    // if the POST fails. We capture the snapshot needed for rollback first.
+    const _sentImagePaths = images.map(img => img.path);
+    let _optimisticAppended = false;
 
     // Show user message immediately in transcript view (optimistic UI).
     // Pass the full sendText (with [Image:] refs) so user bubble renders previews.
+    // Cross-session guard: only render for the session currently in view.
     if (sendText && typeof TranscriptView !== 'undefined' && TranscriptView._sessionId === app.activeSessionId) {
       if (sendText.trim() === '/clear') {
         TranscriptView.clearOnly();
       } else {
         TranscriptView.appendOptimistic(sendText);
+        _optimisticAppended = true;
       }
     }
 
@@ -21420,6 +21540,57 @@ const InputPanel = {
     this._files = this._files.filter(f => !f.path);
     this._renderThumbnails(); // Clear strip first so _autoGrow sees final panel height
     this._autoGrow(ta);
+
+    // Fire the POST without awaiting — perceived latency is now decoupled from the
+    // tmux send-keys sequence. The fallback-Enter poller runs only on success
+    // (chained via .then), and rollback runs on failure (chained via .catch).
+    app.sendInput(inputString, _sendSessionId)
+      .then(() => {
+        // Shell sessions write directly to PTY — no Ink, no busy detection,
+        // no need to retry Enter. Skip the polling entirely.
+        const _sendSession = app.sessions?.get(_sendSessionId);
+        if (_sendSession?.mode !== 'shell') {
+          // Backend awaits tmux completion before responding, so we know Enter
+          // has been dispatched by the time this resolves.
+          // Poll session status for up to 3000ms (20 × 150ms) to detect if Claude
+          // actually received the input. Uses real-time status/isWorking only (NOT
+          // displayStatus which has a 4s hide-debounce that causes false positives).
+          let _sendChecks = 0;
+          const _sendCheckTimer = setInterval(() => {
+            _sendChecks++;
+            const s = app.sessions?.get(_sendSessionId);
+            const isBusy = s?.status === 'busy' || s?.isWorking;
+            if (isBusy) { clearInterval(_sendCheckTimer); return; }
+            if (_sendChecks >= 20) {
+              clearInterval(_sendCheckTimer);
+              // Session still idle 3 s after tmux confirmed Enter was sent —
+              // Enter was likely dropped; resend it once as a fallback.
+              const sNow = app.sessions?.get(_sendSessionId);
+              const isNowBusy = sNow?.status === 'busy' || sNow?.isWorking;
+              if (!isNowBusy) app.sendInput('\r', _sendSessionId).catch(() => {});
+            }
+          }, 150);
+        }
+      })
+      .catch((err) => {
+        // Send failed — roll the optimistic UI back and restore the user's input
+        // so nothing is lost. Only restore the textarea if the user hasn't already
+        // started typing a new message into it.
+        console.error('[InputPanel] send failed, restoring input:', err);
+        const taNow = this._getTextarea();
+        if (taNow && !taNow.value.trim()) {
+          taNow.value = text;
+          this._autoGrow(taNow);
+        }
+        this._restoreImages(_sentImagePaths);
+        // Remove the optimistic bubble we appended, if the same session is still in view.
+        if (_optimisticAppended && typeof TranscriptView !== 'undefined'
+            && TranscriptView._sessionId === _sendSessionId
+            && typeof TranscriptView.removeLastOptimistic === 'function') {
+          TranscriptView.removeLastOptimistic();
+        }
+        if (typeof app !== 'undefined') app.showToast('Message failed to send — your input has been restored.', 'error');
+      });
   },
 
   clear() {
