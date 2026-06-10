@@ -52,6 +52,7 @@ import { homedir } from 'node:os';
 import { Session } from './session.js';
 import type { SessionState, AgentProfile, ClaudeMode } from './types/session.js';
 import type { NiceConfig } from './types/common.js';
+import { resolveModelSlug } from './config/ai-defaults.js';
 import type { StateStore } from './state-store.js';
 import type { TerminalMultiplexer } from './mux-interface.js';
 import { claimWorkItem, getReadyWorkItems, updateWorkItem, listWorkItems, getWorkItem } from './work-items/index.js';
@@ -91,7 +92,10 @@ export interface OrchestratorDeps {
   cleanupSession: (sessionId: string) => Promise<void>;
   mux: TerminalMultiplexer;
   getGlobalNiceConfig: () => Promise<NiceConfig | undefined>;
-  getModelConfig: () => Promise<{ defaultModel?: string } | null>;
+  getModelConfig: () => Promise<{
+    defaultModel?: string;
+    internalModels?: { aiCheck?: string; orchestrator?: string; sessionName?: string; commandPanel?: string };
+  } | null>;
   getClaudeModeConfig: () => Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }>;
   sendPushNotifications: (event: string, data: Record<string, unknown>) => void;
 }
@@ -483,8 +487,11 @@ ${agentList}
 
 Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning": "..." }`;
 
+      const modelConfig = await this.deps.getModelConfig();
+      const orchModel = resolveModelSlug(modelConfig?.internalModels?.orchestrator, 'claude-sonnet-4-6');
+
       const response = (await client.messages.create({
-        model: 'claude-sonnet-4-20250514',
+        model: orchModel,
         max_tokens: 256,
         messages: [{ role: 'user', content: prompt }],
       })) as { content: Array<{ type: string; text?: string }> };
@@ -573,7 +580,11 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
     const prefix = item.source === 'github' ? 'fix' : 'feat';
     const branch = `${prefix}/${item.id}-${slug}`;
     const mainGitRoot = (await findMainGitRoot(casePath)) ?? gitRoot;
-    const worktreePath = join(dirname(mainGitRoot), `${mainGitRoot.split('/').pop()}-${branch.replace(/\//g, '-')}`);
+    // Put dispatch worktrees in ~/.codeman/dispatch-worktrees/ to avoid
+    // phantom projects appearing in the case list.
+    const dispatchDir = join(homedir(), '.codeman', 'dispatch-worktrees');
+    await fs.mkdir(dispatchDir, { recursive: true });
+    const worktreePath = join(dispatchDir, `${mainGitRoot.split('/').pop()}-${branch.replace(/\//g, '-')}`);
 
     try {
       await addWorktree(gitRoot, worktreePath, branch, true);
@@ -607,7 +618,7 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
     const newSession = new Session({
       workingDir: worktreePath,
       mode: 'claude',
-      name: branch,
+      name: item.title,
       mux: this.deps.mux,
       useMux: true,
       niceConfig,
@@ -651,15 +662,23 @@ Which agent should handle this? Return JSON only: { "agentId": "...", "reasoning
       if (item.description) {
         promptParts.push(item.description);
       }
+      if (item.externalRef) {
+        promptParts.push(`Reference: ${item.externalRef}`);
+      }
+      if (item.externalUrl) {
+        promptParts.push(`Details: ${item.externalUrl}`);
+      }
       promptParts.push(`\nWorking directory: ${worktreePath}`);
       promptParts.push(`Branch: ${branch}`);
       promptParts.push(`\nWhen you are done, output: TASK COMPLETE`);
 
       const prompt = promptParts.join('\n\n');
 
-      // Wait a moment for Claude to initialize before sending input
+      // Wait for Claude to initialize, then type the prompt into the
+      // interactive session via tmux (writeViaMux), not runPrompt which
+      // would fail because the interactive PTY is already running.
       await new Promise((resolve) => setTimeout(resolve, 3000));
-      newSession.sendInput(prompt);
+      await newSession.writeViaMux(prompt + '\r');
     } catch (err) {
       console.error(`[orchestrator] session start failed for ${item.id}:`, getErrorMessage(err));
       // Revert work item — don't rely on 5-min dispatch recovery

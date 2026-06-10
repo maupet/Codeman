@@ -12,6 +12,20 @@
 // Model & Context
 // ============================================================================
 
+/** Map UI slugs to API model identifiers */
+export const MODEL_SLUG_MAP: Record<string, string> = {
+  fable: 'claude-fable-5',
+  opus: 'claude-opus-4-6',
+  sonnet: 'claude-sonnet-4-6',
+  haiku: 'claude-haiku-4-5',
+};
+
+/** Resolve a slug (e.g. "opus") to a full API model ID; falls back to the given default. */
+export function resolveModelSlug(slug: string | undefined, fallback: string): string {
+  if (!slug) return fallback;
+  return MODEL_SLUG_MAP[slug] || slug;
+}
+
 /** Default model for AI idle and plan checkers */
 export const AI_CHECK_MODEL = 'claude-opus-4-5-20251101';
 

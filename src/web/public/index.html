@@ -6,6 +6,9 @@
   <meta name="description" content="Claude Code session manager with web interface">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="google" content="notranslate">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180x180.png">
   <link rel="manifest" href="manifest.json">
   <title>Codeman</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2360a5fa'/%3E%3Cstop offset='100%25' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='6' fill='%230a0a0a'/%3E%3Cpath d='M18 4L8 18h6l-2 10 10-14h-6z' fill='url(%23g)'/%3E%3C/svg%3E">
@@ -1293,6 +1296,7 @@
             <div class="form-row">
               <label>Default Model</label>
               <select id="appSettingsDefaultModel" class="form-select">
+                <option value="fable">Fable (Mythos-class)</option>
                 <option value="opus">Opus (Most capable)</option>
                 <option value="sonnet">Sonnet (Balanced)</option>
                 <option value="haiku">Haiku (Fast & cheap)</option>
@@ -1316,6 +1320,7 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Quick searches, codebase exploration</span>
             </div>
@@ -1326,6 +1331,7 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Code writing, feature implementation</span>
             </div>
@@ -1336,6 +1342,7 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Writing and running tests</span>
             </div>
@@ -1346,8 +1353,51 @@
                 <option value="haiku">Haiku</option>
                 <option value="sonnet">Sonnet</option>
                 <option value="opus">Opus</option>
+                <option value="fable">Fable</option>
               </select>
               <span class="form-hint">Code review, quality checks</span>
+            </div>
+            <div class="form-section-header">Internal AI Models</div>
+            <p class="form-hint" style="margin: 0 0 12px 0;">Models used for Codeman's internal AI features (idle detection, command panel, etc.).</p>
+            <div class="form-row">
+              <label>AI Checker</label>
+              <select id="appSettingsModelAiCheck" class="form-select">
+                <option value="opus">Opus (default)</option>
+                <option value="fable">Fable</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="haiku">Haiku</option>
+              </select>
+              <span class="form-hint">Idle detection &amp; plan-mode checks</span>
+            </div>
+            <div class="form-row">
+              <label>Orchestrator</label>
+              <select id="appSettingsModelOrchestrator" class="form-select">
+                <option value="sonnet">Sonnet (default)</option>
+                <option value="fable">Fable</option>
+                <option value="opus">Opus</option>
+                <option value="haiku">Haiku</option>
+              </select>
+              <span class="form-hint">Agent routing for work items</span>
+            </div>
+            <div class="form-row">
+              <label>Session Naming</label>
+              <select id="appSettingsModelSessionName" class="form-select">
+                <option value="haiku">Haiku (default)</option>
+                <option value="fable">Fable</option>
+                <option value="opus">Opus</option>
+                <option value="sonnet">Sonnet</option>
+              </select>
+              <span class="form-hint">Auto-generated session names</span>
+            </div>
+            <div class="form-row">
+              <label>Command Panel</label>
+              <select id="appSettingsModelCommandPanel" class="form-select">
+                <option value="haiku">Haiku (default)</option>
+                <option value="fable">Fable</option>
+                <option value="opus">Opus</option>
+                <option value="sonnet">Sonnet</option>
+              </select>
+              <span class="form-hint">Natural language command interpreter</span>
             </div>
           </div>
           <!-- Paths Tab -->

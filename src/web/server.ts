@@ -2135,12 +2135,14 @@ export class WebServer extends EventEmitter {
   private async getModelConfig(): Promise<{
     defaultModel?: string;
     agentTypeOverrides?: Record<string, string>;
+    internalModels?: { aiCheck?: string; orchestrator?: string; sessionName?: string; commandPanel?: string };
   } | null> {
     const settings = await this.readSettings();
     return (
       (settings.modelConfig as {
         defaultModel?: string;
         agentTypeOverrides?: Record<string, string>;
+        internalModels?: { aiCheck?: string; orchestrator?: string; sessionName?: string; commandPanel?: string };
       }) || null
     );
   }

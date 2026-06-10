@@ -13,7 +13,11 @@ export interface ConfigPort {
   readonly testMode: boolean;
   readonly serverStartTime: number;
   getGlobalNiceConfig(): Promise<NiceConfig | undefined>;
-  getModelConfig(): Promise<{ defaultModel?: string; agentTypeOverrides?: Record<string, string> } | null>;
+  getModelConfig(): Promise<{
+    defaultModel?: string;
+    agentTypeOverrides?: Record<string, string>;
+    internalModels?: { aiCheck?: string; orchestrator?: string; sessionName?: string; commandPanel?: string };
+  } | null>;
   getClaudeModeConfig(): Promise<{ claudeMode?: ClaudeMode; allowedTools?: string }>;
   getDefaultClaudeMdPath(): Promise<string | undefined>;
   getLightState(): unknown;

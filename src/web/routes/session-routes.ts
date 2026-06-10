@@ -47,6 +47,7 @@ import { getLifecycleLog } from '../../session-lifecycle-log.js';
 import type { SessionPort, EventPort, ConfigPort, InfraPort, AuthPort } from '../ports/index.js';
 import { MAX_CONCURRENT_SESSIONS } from '../../config/map-limits.js';
 import { RunSummaryTracker } from '../../run-summary.js';
+import { resolveModelSlug } from '../../config/ai-defaults.js';
 
 import { MAX_INPUT_LENGTH, MAX_SESSION_NAME_LENGTH } from '../../config/terminal-limits.js';
 import { parseTranscriptJSONL } from '../../types/transcript-blocks.js';
@@ -136,9 +137,15 @@ export function registerSessionRoutes(
       }
     }
 
+    // Ensure hooks config exists for Claude sessions so permission/elicitation
+    // hooks fire even for sessions created outside the quick-start/case flow.
+    const mode = body.mode || 'claude';
+    if (mode === 'claude') {
+      await writeHooksConfig(workingDir);
+    }
+
     const globalNice = await ctx.getGlobalNiceConfig();
     const modelConfig = await ctx.getModelConfig();
-    const mode = body.mode || 'claude';
     const model =
       mode === 'opencode' ? body.openCodeConfig?.model : mode !== 'shell' ? modelConfig?.defaultModel : undefined;
     const claudeModeConfig = await ctx.getClaudeModeConfig();
@@ -254,8 +261,11 @@ export function registerSessionRoutes(
 
 ${contextLines.join('\n')}`;
 
+      const nameModelConfig = await ctx.getModelConfig();
+      const nameModel = resolveModelSlug(nameModelConfig?.internalModels?.sessionName, 'claude-haiku-4-5');
+
       const response = (await client.messages.create({
-        model: 'claude-haiku-4-5-20241022',
+        model: nameModel,
         max_tokens: 64,
         messages: [{ role: 'user', content: prompt }],
       })) as { content: Array<{ type: string; text?: string }> };
