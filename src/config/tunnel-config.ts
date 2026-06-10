@@ -31,7 +31,7 @@ export const QR_RATE_LIMIT_MAX = 30;
 export const QR_RATE_LIMIT_WINDOW_MS = 60_000;
 
 /** Per-IP rate limit for QR auth failures (separate from Basic Auth AUTH_FAILURE_MAX) */
-export const QR_AUTH_FAILURE_MAX = 10;
+export const QR_AUTH_FAILURE_MAX = 100;
 
 // ============================================================================
 // Tunnel Process Lifecycle
