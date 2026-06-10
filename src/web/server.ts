@@ -49,6 +49,7 @@ import {
 import type { ClaudeMode } from '../types.js';
 import { installGlobalAskUserQuestionHook } from '../hooks-config.js';
 import type { SessionState } from '../types/session.js';
+import { shouldAutoResumeSession } from '../server/should-auto-resume.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
 import type { TerminalMultiplexer } from '../mux-interface.js';
 import { createMultiplexer } from '../mux-factory.js';
@@ -3623,10 +3624,6 @@ export class WebServer extends EventEmitter {
               session.markStopped();
             }
 
-            // Determine whether Claude was running when the server last persisted this session.
-            // If so and a resumable conversation ID exists, auto-restart Claude with --resume.
-            const wasRunning = savedState.status === 'idle' || savedState.status === 'busy';
-
             this.sessions.set(session.id, session);
             await this.setupSessionListeners(session);
             this.persistSessionState(session);
@@ -3639,7 +3636,7 @@ export class WebServer extends EventEmitter {
               this.startTranscriptWatcher(session.id, transcriptPath);
             }
 
-            if (wasRunning && session.claudeResumeId && session.mode !== 'opencode') {
+            if (shouldAutoResumeSession(savedState)) {
               // Auto-resume: restart Claude with --resume so the user sees a live session
               session.startInteractive().catch((err) => {
                 console.error(`[Server] Failed to auto-resume session ${session.id}:`, err);
