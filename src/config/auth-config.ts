@@ -22,7 +22,7 @@ export const MAX_AUTH_SESSIONS = 100;
 // ============================================================================
 
 /** Max failed auth attempts per IP before 429 rejection */
-export const AUTH_FAILURE_MAX = 10;
+export const AUTH_FAILURE_MAX = 100;
 
 /** Failed auth attempt tracking window (ms) */
 export const AUTH_FAILURE_WINDOW_MS = 15 * 60 * 1000;
