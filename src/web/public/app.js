@@ -21064,6 +21064,15 @@ const InputPanel = {
 
   /** Called by selectSession when the active session changes. Saves old draft, loads new one. */
   onSessionChange(oldId, newId) {
+    // Re-selecting the session whose draft is already loaded is NOT a real switch
+    // — it happens on tab-focus re-sync, where handleInit() nulls activeSessionId
+    // and re-selects the same session to reload the terminal (so oldId arrives as
+    // null).  The textarea already holds the user's live, possibly-unsaved input;
+    // clearing + reloading here would destroy anything typed within the auto-save
+    // debounce window.  Leave it untouched.
+    if (newId && newId === this._currentSessionId) {
+      return;
+    }
     if (oldId) {
       this._saveDraftLocal(oldId);
       if (typeof SecretDetector !== 'undefined') SecretDetector.clearSession(oldId);
