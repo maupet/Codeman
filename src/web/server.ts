@@ -129,6 +129,7 @@ import {
   registerFeatureUsageRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
+import { registerHermesRoutes } from './routes/hermes-routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -774,6 +775,7 @@ export class WebServer extends EventEmitter {
     updateChecker.check().catch(() => {});
     registerUpdateRoutes(this.app, ctx, updateChecker);
     registerWorktreeSessionRoutes(this.app, ctx);
+    registerHermesRoutes(this.app, ctx);
     registerWorktreeRoutes(this.app, ctx);
     registerMcpRoutes(this.app, ctx);
     registerAgentRoutes(this.app, ctx);
