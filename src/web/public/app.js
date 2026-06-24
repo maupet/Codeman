@@ -3041,7 +3041,10 @@ const PanelBackdrop = {
 const TranscriptTTS = {
   _currentBtn: null,
   _utterance: null,
-  supported: 'speechSynthesis' in window,
+  _audio: null,
+  _audioUrl: null,
+  _gen: 0,
+  supported: 'speechSynthesis' in window || 'Audio' in window,
 
   _stripMarkdown(text) {
     let s = text;
@@ -3075,21 +3078,68 @@ const TranscriptTTS = {
     }
     this._stop();
     const strippedText = this._stripMarkdown(rawText);
-    const utterance = new SpeechSynthesisUtterance(strippedText);
+    const gen = ++this._gen;
+    this._currentBtn = btn;
+    this._setSpeakingUI(btn);
+    // Edge TTS first (better voice); fall back to the browser engine on any failure.
+    this._speakEdge(btn, strippedText, gen).catch(() => {
+      if (gen !== this._gen) return;
+      this._speakWeb(btn, strippedText, gen);
+    });
+  },
+
+  async _speakEdge(btn, text, gen) {
+    const resp = await fetch('/api/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!resp.ok) throw new Error(`tts ${resp.status}`);
+    const blob = await resp.blob();
+    if (gen !== this._gen) return; // stopped/superseded while fetching
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    this._audio = audio;
+    this._audioUrl = url;
+    audio.onended = () => this._reset(btn);
+    audio.onerror = () => this._reset(btn);
+    await audio.play();
+  },
+
+  _speakWeb(btn, text, gen) {
+    if (!('speechSynthesis' in window)) {
+      this._reset(btn);
+      return;
+    }
+    const utterance = new SpeechSynthesisUtterance(text);
     utterance.onend = () => this._reset(btn);
     utterance.onerror = () => this._reset(btn);
     this._utterance = utterance;
-    this._currentBtn = btn;
+    if (gen !== this._gen) return;
+    window.speechSynthesis.speak(utterance);
+  },
+
+  _setSpeakingUI(btn) {
     btn.classList.add('tv-tts-btn--speaking');
     btn.setAttribute('aria-label', 'Stop reading aloud');
     btn.setAttribute('title', 'Stop reading aloud');
     while (btn.firstChild) btn.removeChild(btn.firstChild);
     btn.appendChild(this._stopSVG());
-    window.speechSynthesis.speak(utterance);
   },
 
   _stop() {
-    if (window.speechSynthesis.speaking) {
+    this._gen++;
+    if (this._audio) {
+      this._audio.pause();
+      this._audio.onended = null;
+      this._audio.onerror = null;
+      this._audio = null;
+    }
+    if (this._audioUrl) {
+      URL.revokeObjectURL(this._audioUrl);
+      this._audioUrl = null;
+    }
+    if ('speechSynthesis' in window && window.speechSynthesis.speaking) {
       window.speechSynthesis.cancel();
     }
     if (this._currentBtn) {
@@ -3103,6 +3153,11 @@ const TranscriptTTS = {
     btn.setAttribute('title', 'Read aloud');
     while (btn.firstChild) btn.removeChild(btn.firstChild);
     btn.appendChild(this._speakerSVG());
+    if (this._audioUrl) {
+      URL.revokeObjectURL(this._audioUrl);
+      this._audioUrl = null;
+    }
+    this._audio = null;
     this._currentBtn = null;
     this._utterance = null;
   },

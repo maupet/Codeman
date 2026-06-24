@@ -753,6 +753,40 @@ export class WebServer extends EventEmitter {
       reply.code(200).send({ breadcrumbs: _crashBreadcrumbs, timestamp: Date.now() });
     });
 
+    // Text-to-speech proxy — forwards transcript text to the local Edge TTS shim
+    // (OpenAI-compatible) and pipes the resulting MP3 back. The Edge server binds
+    // to localhost, so remote browsers reach it only through this proxy.
+    this.app.post('/api/tts', async (req, reply) => {
+      const body = (req.body as { text?: string; voice?: string }) || {};
+      const text = (body.text || '').trim();
+      if (!text) {
+        reply.code(400).send({ error: 'text is required' });
+        return;
+      }
+      const ttsUrl = process.env.CODEMAN_TTS_URL || 'http://127.0.0.1:8091/v1/audio/speech';
+      const ttsKey = process.env.CODEMAN_TTS_KEY || 'local-edge-tts';
+      const ttsVoice = body.voice || process.env.CODEMAN_TTS_VOICE || 'en-US-AriaNeural';
+      try {
+        const upstream = await fetch(ttsUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${ttsKey}`,
+          },
+          body: JSON.stringify({ model: 'edge-tts', input: text, voice: ttsVoice }),
+        });
+        if (!upstream.ok || !upstream.body) {
+          reply.code(502).send({ error: `tts upstream returned ${upstream.status}` });
+          return;
+        }
+        const audio = Buffer.from(await upstream.arrayBuffer());
+        reply.header('Content-Type', upstream.headers.get('content-type') || 'audio/mpeg');
+        reply.code(200).send(audio);
+      } catch (err) {
+        reply.code(502).send({ error: `tts proxy failed: ${(err as Error).message}` });
+      }
+    });
+
     // Register all route modules
     const ctx = this.createRouteContext();
     registerPushRoutes(this.app, ctx);
