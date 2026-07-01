@@ -30,3 +30,4 @@ export { registerOrchestratorRoutes } from './orchestrator-routes.js';
 export { registerCommandPanelRoutes } from './command-panel-routes.js';
 export { registerIntegrationRoutes } from './integration-routes.js';
 export { registerFeatureUsageRoutes } from './feature-usage-routes.js';
+export { registerNotionWebhookRoutes } from './notion-webhook-routes.js';
