@@ -63,3 +63,18 @@ export type ExternalContext =
   | { type: 'sentry'; data: SentryIssueContext; error?: undefined }
   | { type: 'slack'; data: SlackMessageContext; error?: undefined }
   | { type: string; data?: undefined; error: string };
+
+/** Mapping from a Notion Project select value to Gitea repo and Codeman case. */
+export interface NotionProjectMapping {
+  giteaRepo: string;
+  caseId: string;
+}
+
+/** Configuration for the Notion integration, stored in ~/.codeman/notion-config.json. */
+export interface NotionConfig {
+  apiKey: string;
+  databaseId: string;
+  dataSourceId: string;
+  webhookSecret: string;
+  projectMapping: Record<string, NotionProjectMapping>;
+}

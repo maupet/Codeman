@@ -19,7 +19,7 @@ import { FastifyInstance } from 'fastify';
 import type { EventPort } from '../ports/event-port.js';
 import type { ConfigPort } from '../ports/config-port.js';
 import { SseEvent } from '../sse-events.js';
-import { getOrchestrator } from '../../orchestrator.js';
+import { getOrchestrator, notionCompletionCallback } from '../../orchestrator.js';
 import {
   createWorkItem,
   getWorkItem,
@@ -153,6 +153,13 @@ export function registerWorkItemRoutes(app: FastifyInstance, ctx: WorkItemRoutes
       } catch {
         /* orchestrator not initialized */
       }
+    }
+
+    // Trigger Notion callback for done transitions
+    if (body.status === 'done' && updated.source === 'notion') {
+      notionCompletionCallback(updated).catch((err: unknown) => {
+        console.error('[work-item-routes] Notion callback failed:', err);
+      });
     }
 
     return { success: true, data: updated };
