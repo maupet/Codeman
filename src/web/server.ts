@@ -47,7 +47,7 @@ import {
   type ActiveBashTool,
 } from '../session.js';
 import type { ClaudeMode } from '../types.js';
-import { installGlobalAskUserQuestionHook } from '../hooks-config.js';
+import { installGlobalCodemanHooks } from '../hooks-config.js';
 import type { SessionState } from '../types/session.js';
 import { shouldAutoResumeSession } from '../server/should-auto-resume.js';
 import { RespawnController, RespawnConfig, RespawnState } from '../respawn-controller.js';
@@ -130,6 +130,7 @@ import {
   registerFeatureUsageRoutes,
 } from './routes/index.js';
 import { registerActiveSessionRoutes } from './routes/active-session-routes.js';
+import { registerHermesRoutes } from './routes/hermes-routes.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -581,6 +582,7 @@ export class WebServer extends EventEmitter {
       startTranscriptWatcher: this.startTranscriptWatcher.bind(this),
       stopTranscriptWatcher: this.stopTranscriptWatcher.bind(this),
       getTranscriptPath: this.getTranscriptPath.bind(this),
+      getTranscriptState: this.getTranscriptState.bind(this),
       // InfraPort
       mux: this.mux,
       runSummaryTrackers: this.runSummaryTrackers,
@@ -752,6 +754,40 @@ export class WebServer extends EventEmitter {
       reply.code(200).send({ breadcrumbs: _crashBreadcrumbs, timestamp: Date.now() });
     });
 
+    // Text-to-speech proxy — forwards transcript text to the local Edge TTS shim
+    // (OpenAI-compatible) and pipes the resulting MP3 back. The Edge server binds
+    // to localhost, so remote browsers reach it only through this proxy.
+    this.app.post('/api/tts', async (req, reply) => {
+      const body = (req.body as { text?: string; voice?: string }) || {};
+      const text = (body.text || '').trim();
+      if (!text) {
+        reply.code(400).send({ error: 'text is required' });
+        return;
+      }
+      const ttsUrl = process.env.CODEMAN_TTS_URL || 'http://127.0.0.1:8091/v1/audio/speech';
+      const ttsKey = process.env.CODEMAN_TTS_KEY || 'local-edge-tts';
+      const ttsVoice = body.voice || process.env.CODEMAN_TTS_VOICE || 'en-US-AriaNeural';
+      try {
+        const upstream = await fetch(ttsUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${ttsKey}`,
+          },
+          body: JSON.stringify({ model: 'edge-tts', input: text, voice: ttsVoice }),
+        });
+        if (!upstream.ok || !upstream.body) {
+          reply.code(502).send({ error: `tts upstream returned ${upstream.status}` });
+          return;
+        }
+        const audio = Buffer.from(await upstream.arrayBuffer());
+        reply.header('Content-Type', upstream.headers.get('content-type') || 'audio/mpeg');
+        reply.code(200).send(audio);
+      } catch (err) {
+        reply.code(502).send({ error: `tts proxy failed: ${(err as Error).message}` });
+      }
+    });
+
     // Register all route modules
     const ctx = this.createRouteContext();
     registerPushRoutes(this.app, ctx);
@@ -774,6 +810,7 @@ export class WebServer extends EventEmitter {
     updateChecker.check().catch(() => {});
     registerUpdateRoutes(this.app, ctx, updateChecker);
     registerWorktreeSessionRoutes(this.app, ctx);
+    registerHermesRoutes(this.app, ctx);
     registerWorktreeRoutes(this.app, ctx);
     registerMcpRoutes(this.app, ctx);
     registerAgentRoutes(this.app, ctx);
@@ -909,6 +946,17 @@ export class WebServer extends EventEmitter {
       watcher.stop();
       this.transcriptWatchers.delete(sessionId);
     }
+  }
+
+  private getTranscriptState(sessionId: string): import('./hermes/digest.js').TranscriptStateLite | null {
+    const watcher = this.transcriptWatchers.get(sessionId);
+    if (!watcher) return null;
+    const s = watcher.getState();
+    return {
+      isComplete: s.isComplete,
+      toolExecuting: s.toolExecuting,
+      lastAssistantMessage: s.lastAssistantMessage,
+    };
   }
 
   /** Return the transcript file path for a session.
@@ -2951,22 +2999,20 @@ export class WebServer extends EventEmitter {
     // Set API URL for child processes (MCP server, spawned sessions)
     process.env.CODEMAN_API_URL = `${protocol}://localhost:${this.port}`;
 
-    // Ensure the AskUserQuestion PreToolUse hook is installed in the user's global
-    // ~/.claude/settings.json so every Codeman session (incl. pre-existing worktrees)
-    // surfaces interactive questions live in the transcript. Idempotent + safe;
-    // opt out with CODEMAN_NO_GLOBAL_HOOK=1. Skipped in test mode.
+    // Ensure Codeman's global hooks are present in the user's ~/.claude/settings.json so
+    // every Codeman session (incl. pre-existing worktrees) gets the idle_prompt
+    // notification, and strip the dead AskUserQuestion PreToolUse hook if a previous
+    // version left one behind. Idempotent + safe; opt out with CODEMAN_NO_GLOBAL_HOOK=1.
+    // Skipped in test mode.
     if (!this.testMode) {
-      installGlobalAskUserQuestionHook()
+      installGlobalCodemanHooks()
         .then((r) => {
           if (r.installed) {
-            console.log('✓ Installed global AskUserQuestion hook in ~/.claude/settings.json');
+            console.log(`✓ Updated global Codeman hooks in ~/.claude/settings.json (${r.reason})`);
           }
         })
         .catch((err: unknown) => {
-          console.warn(
-            '[hooks] global AskUserQuestion hook not installed:',
-            err instanceof Error ? err.message : String(err)
-          );
+          console.warn('[hooks] global Codeman hooks not updated:', err instanceof Error ? err.message : String(err));
         });
     }
 

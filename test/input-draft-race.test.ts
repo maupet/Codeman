@@ -432,3 +432,71 @@ describe('Server draft applied — no local cache, empty textarea, fetch returns
     expect(value).toBe('server restored draft');
   });
 });
+
+// ─── Gap 6: Tab-focus re-sync must NOT wipe unsaved compose input ──────────────
+//
+// Regression for the "input disappears a few seconds after focusing the window"
+// bug.  On tab focus, _onTabVisible() → loadState() → handleInit() nulls
+// activeSessionId and re-selects the SAME session to force a terminal reload.
+// Because activeSessionId is null, selectSession's same-session early-return is
+// bypassed and InputPanel.onSessionChange(null, sessionId) runs.  With oldId
+// null, the draft-save guard is skipped and the textarea is unconditionally
+// cleared — destroying anything typed within the 2s auto-save debounce window.
+//
+// Re-selecting the session whose draft is already loaded must leave the textarea
+// untouched.
+
+describe('Tab-focus re-sync — re-selecting the already-loaded session preserves unsaved input', () => {
+  let context: BrowserContext;
+  let page: Page;
+  let sessionId: string;
+
+  beforeAll(async () => {
+    ({ context, page } = await freshPage());
+    await navigateTo(page);
+    sessionId = await createSession(page);
+
+    // No server draft — the only content is what the user just typed locally.
+    await mockDraftEndpointNotFound(page, sessionId);
+
+    await page.evaluate(async (sid) => {
+      const ip = (
+        window as unknown as {
+          InputPanel: {
+            onSessionChange: (oldId: string | null, newId: string) => void;
+            _getTextarea: () => HTMLTextAreaElement | null;
+            _drafts: Map<string, unknown>;
+          };
+        }
+      ).InputPanel;
+
+      // Session is active with its (empty) draft loaded → _currentSessionId = sid
+      ip._drafts.delete(sid);
+      ip.onSessionChange(null, sid);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // User types fresh text that has NOT yet hit the 2s debounced save, so it
+      // is not in _drafts or on the server.
+      const ta = ip._getTextarea();
+      if (ta) ta.value = 'unsaved text typed just before focus';
+
+      // Tab focus → handleInit nulls activeSessionId and re-selects the same
+      // session, so onSessionChange fires with oldId=null, newId=sid.
+      ip.onSessionChange(null, sid);
+      await new Promise((r) => setTimeout(r, 150));
+    }, sessionId);
+  });
+
+  afterAll(async () => {
+    await deleteSession(page, sessionId);
+    await context?.close();
+  });
+
+  it('textarea still holds the unsaved typed text after the focus re-sync', async () => {
+    const value = await page.evaluate(() => {
+      const ta = document.getElementById('composeTextarea') as HTMLTextAreaElement | null;
+      return ta ? ta.value : null;
+    });
+    expect(value).toBe('unsaved text typed just before focus');
+  });
+});
