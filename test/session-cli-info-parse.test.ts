@@ -62,10 +62,10 @@ function parseClaudeCodeInfo(state: CliInfoState, cleanData: string): ParseResul
   // Model + account. Model updates live on change (so `/model X` propagates to the UI);
   // account is one-time (doesn't change at runtime).
   const modelPatterns = [
-    /(Fable \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-    /(Opus \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-    /(Sonnet \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-    /(Haiku \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+    /(Fable \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+    /(Opus \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+    /(Sonnet \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+    /(Haiku \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
   ];
 
   for (const pattern of modelPatterns) {
@@ -178,6 +178,35 @@ describe('parseClaudeCodeInfo — /model switches after initial parse', () => {
     parseClaudeCodeInfo(state, 'Fable 5 · Claude Max\n~/dir');
     expect(state.cliVersion).toBe('2.1.170');
     expect(state.cliAccountType).toBe('Claude Max');
+  });
+});
+
+describe('parseClaudeCodeInfo — banner suffixes like "with high effort"', () => {
+  it('detects Fable when banner has "with high effort" between version and separator', () => {
+    const state = fresh();
+    parseClaudeCodeInfo(state, 'Claude Code v2.1.170\nFable 5 with high effort · Claude Max\n~/dir');
+    expect(state.cliModel).toBe('Fable 5');
+    expect(state.cliAccountType).toBe('Claude Max');
+  });
+
+  it('detects Opus with effort suffix', () => {
+    const state = fresh();
+    parseClaudeCodeInfo(state, 'Claude Code v2.1.170\nOpus 4.8 with high effort · Claude Max\n~/dir');
+    expect(state.cliModel).toBe('Opus 4.8');
+  });
+
+  it('detects Sonnet with effort suffix', () => {
+    const state = fresh();
+    parseClaudeCodeInfo(state, 'Claude Code v2.1.170\nSonnet 5 with medium effort · API\n~/dir');
+    expect(state.cliModel).toBe('Sonnet 5');
+    expect(state.cliAccountType).toBe('API');
+  });
+
+  it('captures just the model+version, discarding the effort suffix', () => {
+    const state = fresh();
+    parseClaudeCodeInfo(state, 'Haiku 4.5 with low effort · Claude Max\n~/dir');
+    expect(state.cliModel).toBe('Haiku 4.5');
+    // and NOT 'Haiku 4.5 with low effort'
   });
 });
 
