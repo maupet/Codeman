@@ -15,8 +15,8 @@
 /** Map UI slugs to API model identifiers */
 export const MODEL_SLUG_MAP: Record<string, string> = {
   fable: 'claude-fable-5',
-  opus: 'claude-opus-4-6',
-  sonnet: 'claude-sonnet-4-6',
+  opus: 'claude-opus-4-8',
+  sonnet: 'claude-sonnet-5',
   haiku: 'claude-haiku-4-5',
 };
 
@@ -27,7 +27,7 @@ export function resolveModelSlug(slug: string | undefined, fallback: string): st
 }
 
 /** Default model for AI idle and plan checkers */
-export const AI_CHECK_MODEL = 'claude-opus-4-5-20251101';
+export const AI_CHECK_MODEL = 'claude-opus-4-8';
 
 /** Max context chars for idle checker (~4k tokens) */
 export const AI_IDLE_CHECK_MAX_CONTEXT = 16000;

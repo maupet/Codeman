@@ -330,7 +330,6 @@ export class Session extends EventEmitter {
   private _currentModel: string = ''; // confirmed model from stream-json assistant messages
   private _cliAccountType: string = '';
   private _cliLatestVersion: string = '';
-  private _cliInfoParsed: boolean = false; // Only parse once per session
 
   // Timer tracking for cleanup (prevents memory leaks)
   private _promptCheckInterval: NodeJS.Timeout | null = null;
@@ -1430,10 +1429,9 @@ export class Session extends EventEmitter {
       this.parseTokensFromStatusLine(getCleanData());
     }
 
-    // Parse Claude Code CLI info (version, model, account type) from startup
-    if (!this._cliInfoParsed) {
-      this.parseClaudeCodeInfo(getCleanData());
-    }
+    // Parse Claude Code CLI info (version, model, account type) — runs on every
+    // update because model can change at runtime via `/model X`.
+    this.parseClaudeCodeInfo(getCleanData());
 
     // Parse task descriptions from terminal output (e.g., "Explore(Check files)")
     if (rawData.includes('(') && rawData.includes(')')) {
@@ -2221,19 +2219,21 @@ export class Session extends EventEmitter {
     }
   }
 
-  // Parse Claude Code CLI info from terminal startup output
-  // Extracts version, model, and account type for display in Codeman UI
-  // Note: Expects cleanData with ANSI codes already stripped by caller
+  // Parse Claude Code CLI info from terminal output.
+  // Extracts version, model, and account type for display in Codeman UI.
+  // Version/account/latestVersion parse once; model tracks live so `/model X`
+  // switches (which redraw the banner) propagate to the UI chip.
+  // Note: Expects cleanData with ANSI codes already stripped by caller.
   private parseClaudeCodeInfo(cleanData: string): void {
-    // Only parse once per session (during startup)
-    if (this._cliInfoParsed) return;
-
-    // Quick pre-checks
+    // Quick pre-checks — every supported model family must appear here or the
+    // banner containing it will short-circuit.
     if (
       !cleanData.includes('Claude') &&
       !cleanData.includes('current:') &&
+      !cleanData.includes('Fable') &&
       !cleanData.includes('Opus') &&
-      !cleanData.includes('Sonnet')
+      !cleanData.includes('Sonnet') &&
+      !cleanData.includes('Haiku')
     ) {
       return;
     }
@@ -2248,29 +2248,29 @@ export class Session extends EventEmitter {
       }
     }
 
-    // Match model and account: "Opus 4.5 · Claude Max" or "Sonnet 4 · API"
-    // The · character separates model from account type
-    if (!this._cliModel || !this._cliAccountType) {
-      // Try various model patterns
-      const modelPatterns = [
-        /(Opus \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-        /(Sonnet \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-        /(Haiku \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-      ];
+    // Match model and account: "Opus 4.5 · Claude Max" or "Sonnet 4 · API".
+    // Model updates live on change; account is one-time (doesn't change at runtime).
+    const modelPatterns = [
+      /(Fable \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      /(Opus \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      /(Sonnet \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      /(Haiku \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+    ];
 
-      for (const pattern of modelPatterns) {
-        const match = cleanData.match(pattern);
-        if (match) {
-          if (!this._cliModel) {
-            this._cliModel = match[1].trim();
-            changed = true;
-          }
-          if (!this._cliAccountType) {
-            this._cliAccountType = match[2].trim();
-            changed = true;
-          }
-          break;
+    for (const pattern of modelPatterns) {
+      const match = cleanData.match(pattern);
+      if (match) {
+        const detectedModel = match[1].trim();
+        const detectedAccount = match[2].trim();
+        if (this._cliModel !== detectedModel) {
+          this._cliModel = detectedModel;
+          changed = true;
         }
+        if (!this._cliAccountType) {
+          this._cliAccountType = detectedAccount;
+          changed = true;
+        }
+        break;
       }
     }
 
@@ -2281,11 +2281,6 @@ export class Session extends EventEmitter {
         this._cliLatestVersion = latestMatch[1];
         changed = true;
       }
-    }
-
-    // Mark as parsed once we have the essential info
-    if (this._cliVersion && this._cliModel) {
-      this._cliInfoParsed = true;
     }
 
     // Emit update if anything changed
