@@ -2248,13 +2248,16 @@ export class Session extends EventEmitter {
       }
     }
 
-    // Match model and account: "Opus 4.5 · Claude Max" or "Sonnet 4 · API".
+    // Match model and account: "Fable 5 · Claude Max", "Fable 5 with high effort · Claude Max", etc.
+    // The [^·•\n]* between the version and the separator tolerates any suffix that Claude
+    // Code inserts into the banner (e.g., "with high effort"). Group 1 captures just the
+    // model+version so the chip shows "Fable 5", not "Fable 5 with high effort".
     // Model updates live on change; account is one-time (doesn't change at runtime).
     const modelPatterns = [
-      /(Fable \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-      /(Opus \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-      /(Sonnet \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
-      /(Haiku \d+(?:\.\d+)?)\s*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      /(Fable \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      /(Opus \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      /(Sonnet \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
+      /(Haiku \d+(?:\.\d+)?)[^·•\n]*[·•]\s*(.+?)(?:\s*$|\s+[~/])/,
     ];
 
     for (const pattern of modelPatterns) {
